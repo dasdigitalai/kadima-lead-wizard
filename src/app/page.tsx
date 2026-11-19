@@ -419,8 +419,12 @@ export default function Home() {
   const tabs = [['work', `🎯 Work leads${leads.length ? ` (${leads.length})` : ''}`], ['find', '🚀 Find new businesses'], ['upload', '🔍 Scan a CSV']] as const
   return (
     <div style={{ maxWidth: 1600, margin: '0 auto', padding: '2rem 1rem' }}>
-      <h1 style={{ fontSize: 28, fontWeight: 700, color: '#f1f5f9' }}>🧭 Lead Wizard</h1>
-      <p style={{ color: C.mute, margin: '4px 0 20px', fontSize: 14 }}>Pick an industry, find the businesses, see who to call and what to say, and spot payment-processing opportunities.</p>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+        <img src="/kadima-logo.svg" alt="Kadima" height={30} style={{ height: 30, width: 'auto', display: 'block' }} />
+        <span aria-hidden="true" style={{ width: 1, height: 28, background: C.line }} />
+        <h1 style={{ fontSize: 26, fontWeight: 700, color: '#f1f5f9', letterSpacing: '-0.01em' }}>Lead Wizard</h1>
+      </div>
+      <p style={{ color: C.mute, margin: '12px 0 20px', fontSize: 14 }}>Pick an industry, find the businesses, see who to call and what to say, and spot payment-processing opportunities.</p>
       <div style={{ display: 'flex', gap: 4, marginBottom: '1.5rem', background: C.card, border: `1px solid ${C.line}`, borderRadius: 10, padding: 4, width: 'fit-content', flexWrap: 'wrap' }}>
         {tabs.map(([id, l]) => (
           <button key={id} onClick={() => setTab(id)} style={{ background: tab === id ? C.bg : 'transparent', color: tab === id ? '#f1f5f9' : C.mute, border: tab === id ? '1px solid #334155' : '1px solid transparent', borderRadius: 8, padding: '8px 20px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>{l}</button>
