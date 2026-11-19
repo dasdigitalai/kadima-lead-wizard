@@ -363,6 +363,45 @@ function UploadTab({ onLeads, onRemoved, onRestored, industry, setIndustry }: { 
   )
 }
 
+// ── Log out ────────────────────────────────────────────────────────────────
+/** Remove everything this app saved in the browser (leads, call history, name, goal, industry, access code). */
+function wipeLocalData() {
+  try {
+    for (const k of Object.keys(localStorage)) if (k.startsWith('plr.')) localStorage.removeItem(k)
+  } catch { /* storage blocked: nothing to clear */ }
+  try { sessionStorage.clear() } catch { /* ignore */ }
+}
+
+function LogoutDialog({ leads, status, onCancel, onConfirm }: { leads: Lead[]; status: StatusMap; onCancel: () => void; onConfirm: () => void }) {
+  const logged = Object.keys(status).length
+  const cancelRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    cancelRef.current?.focus()
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onCancel() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onCancel])
+  const big = { width: '100%', minHeight: 48, borderRadius: 10, fontSize: 16, fontWeight: 700, cursor: 'pointer' } as const
+  return (
+    <div onClick={onCancel} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'grid', placeItems: 'center', padding: 16, zIndex: 50 }}>
+      <div role="dialog" aria-modal="true" aria-labelledby="logout-title" onClick={e => e.stopPropagation()}
+        style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 24, maxWidth: 440, width: '100%' }}>
+        <h2 id="logout-title" style={{ fontSize: 20, color: '#f8fafc', marginBottom: 8 }}>Log out and start fresh?</h2>
+        <p style={{ color: '#cbd5e1', fontSize: 14, lineHeight: 1.6, marginBottom: 14 }}>
+          This clears everything saved in this browser: your leads, call history, name and settings. You'll need the access code to get back in.
+          {(leads.length > 0 || logged > 0) && <> <b>Download what you want to keep first.</b></>}
+        </p>
+        <div style={{ display: 'grid', gap: 10 }}>
+          {logged > 0 && <button onClick={() => download('my_call_log.csv', toCallLogCSV(leads, status, leadKey))} style={{ ...big, background: C.bg, color: C.green, border: `1px solid ${C.green}55` }}>⬇️ Download my call log ({logged})</button>}
+          {leads.length > 0 && <button onClick={() => download('lead_wizard_contacts.csv', toContactsCSV(leads.filter(l => status[leadKey(l)]?.s !== 'notfit')))} style={{ ...big, background: C.bg, color: C.green, border: `1px solid ${C.green}55` }}>⬇️ Download contacts</button>}
+          <button onClick={onConfirm} style={{ ...big, background: '#7f1d1d', color: '#fecaca', border: '1px solid #ef444477' }}>Log out &amp; clear everything</button>
+          <button ref={cancelRef} onClick={onCancel} style={{ ...big, background: 'transparent', color: '#94a3b8', border: `1px solid ${C.line}` }}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function Home() {
   const [tab, setTab] = useState<'work' | 'find' | 'upload'>('find')
   const [ready, setReady] = useState(false)
@@ -372,6 +411,7 @@ export default function Home() {
   const [agentName, setAgentName] = useState('')
   const [serverKey, setServerKey] = useState(false)
   const [industry, setIndustryState] = useState(DEFAULT_INDUSTRY)
+  const [confirmLogout, setConfirmLogout] = useState(false)
   const setIndustry = (id: string) => { setIndustryState(id); store.set('plr.industry', id) }
 
   // load saved work once, and learn whether the server holds the Google key / needs an access code
@@ -415,6 +455,7 @@ export default function Home() {
   })
   const clearAll = () => { setLeads([]); setStatus({}); setHistory([]) }
   const loggedCount = Object.keys(status).length
+  const logout = () => { wipeLocalData(); window.location.reload() }   // reload = clean state; asks for the access code again if one is required
 
   const tabs = [['work', `🎯 Work leads${leads.length ? ` (${leads.length})` : ''}`], ['find', '🚀 Find new businesses'], ['upload', '🔍 Scan a CSV']] as const
   return (
@@ -423,6 +464,7 @@ export default function Home() {
         <img src="/kadima-logo.svg" alt="Kadima" height={30} style={{ height: 30, width: 'auto', display: 'block' }} />
         <span aria-hidden="true" style={{ width: 1, height: 28, background: C.line }} />
         <h1 style={{ fontSize: 26, fontWeight: 700, color: '#f1f5f9', letterSpacing: '-0.01em' }}>Lead Wizard</h1>
+        <button onClick={() => setConfirmLogout(true)} style={{ marginLeft: 'auto', background: 'transparent', color: '#94a3b8', border: `1px solid ${C.line}`, borderRadius: 8, padding: '8px 16px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>↪ Log out</button>
       </div>
       <p style={{ color: C.mute, margin: '12px 0 20px', fontSize: 14 }}>Pick an industry, find the businesses, see who to call and what to say, and spot payment-processing opportunities.</p>
       <div style={{ display: 'flex', gap: 4, marginBottom: '1.5rem', background: C.card, border: `1px solid ${C.line}`, borderRadius: 10, padding: 4, width: 'fit-content', flexWrap: 'wrap' }}>
@@ -443,6 +485,7 @@ export default function Home() {
       )}
       {tab === 'find' && <FindTab onLeads={addLeads} onRemoved={removeLeads} onRestored={addLeads} serverKey={serverKey} industry={industry} setIndustry={setIndustry} />}
       {tab === 'upload' && <UploadTab onLeads={addLeads} onRemoved={removeLeads} onRestored={addLeads} industry={industry} setIndustry={setIndustry} />}
+      {confirmLogout && <LogoutDialog leads={leads} status={status} onCancel={() => setConfirmLogout(false)} onConfirm={logout} />}
     </div>
   )
 }
