@@ -92,7 +92,7 @@ function Detail({ r }: { r: Lead }) {
   )
 }
 
-function Results({ rows }: { rows: Lead[] }) {
+function Results({ rows, onRemove, onUndo, undoCount, locked }: { rows: Lead[]; onRemove: (keys: string[]) => void; onUndo: () => void; undoCount: number; locked: boolean }) {
   const [open, setOpen] = useState<string>('')
   const [hideChains, setHideChains] = useState(false)
   const [onlyIndependent, setOnlyIndependent] = useState(false)
@@ -107,12 +107,15 @@ function Results({ rows }: { rows: Lead[] }) {
       <div style={{ display: 'flex', gap: 18, padding: '10px 14px', borderBottom: `1px solid ${C.line}`, fontSize: 13, color: '#94a3b8', flexWrap: 'wrap' }}>
         <label style={{ cursor: 'pointer' }}><input type="checkbox" checked={hideChains} onChange={e => setHideChains(e.target.checked)} /> Hide franchises &amp; chains</label>
         <label style={{ cursor: 'pointer' }}><input type="checkbox" checked={onlyIndependent} onChange={e => setOnlyIndependent(e.target.checked)} /> Single-location independents only</label>
+        {rows.some(isChain) && <button disabled={locked} onClick={() => { if (window.confirm(`Remove ${rows.filter(isChain).length} franchises/chains from this list?`)) onRemove(rows.filter(isChain).map(r => r.placeId || r.website || r.name)) }} style={{ background: 'none', border: `1px solid ${C.red}55`, color: '#fca5a5', borderRadius: 6, padding: '2px 10px', fontSize: 12, cursor: locked ? 'not-allowed' : 'pointer' }}>🗑 Remove all franchises &amp; chains ({rows.filter(isChain).length})</button>}
+        {undoCount > 0 && <button onClick={onUndo} style={{ background: 'none', border: `1px solid ${C.line}`, color: '#60a5fa', borderRadius: 6, padding: '2px 10px', fontSize: 12, cursor: 'pointer' }}>↩ Undo remove ({undoCount})</button>}
+        {locked && <span style={{ color: C.mute }}>Wait for the run to finish to remove rows.</span>}
         <span style={{ marginLeft: 'auto', color: C.mute }}>Showing {sorted.length} of {rows.length}</span>
       </div>
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
           <thead><tr style={{ background: C.bg, borderBottom: `1px solid ${C.line}` }}>
-            {['Score', 'Company', 'Type', 'Contact', 'Email', 'Phone', 'Payments', 'Overview'].map(h => <th key={h} style={th}>{h}</th>)}
+            {['', 'Score', 'Company', 'Type', 'Contact', 'Email', 'Phone', 'Payments', 'Overview'].map((h, i) => <th key={i} style={th}>{h}</th>)}
           </tr></thead>
           <tbody>
             {sorted.map((r, i) => {
@@ -121,6 +124,10 @@ function Results({ rows }: { rows: Lead[] }) {
               return (
                 <Fragment key={key}>
                   <tr onClick={() => setOpen(open === key ? '' : key)} style={{ cursor: 'pointer', borderBottom: `1px solid #1e2a3a`, background: i % 2 ? '#161d2e' : 'transparent' }}>
+                    <td style={{ ...td, padding: '8px 6px 8px 10px', width: 34 }}>
+                      <button title="Remove from list" aria-label={`Remove ${r.name}`} disabled={locked} onClick={e => { e.stopPropagation(); onRemove([leadKey(r)]) }}
+                        style={{ background: 'transparent', border: `1px solid ${C.line}`, color: '#94a3b8', borderRadius: 6, width: 28, height: 28, cursor: locked ? 'not-allowed' : 'pointer', fontSize: 14, lineHeight: 1 }}>✕</button>
+                    </td>
                     <td style={td}><Badge text={String(r.leadScore)} color={scoreColor(r.leadScore)} /></td>
                     <td style={{ ...td, color: '#f1f5f9', fontWeight: 600, minWidth: 180 }}>
                       {r.website ? <a href={r.website.startsWith('http') ? r.website : `https://${r.website}`} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ color: '#60a5fa', textDecoration: 'none' }}>{r.name}</a> : r.name}
@@ -141,7 +148,7 @@ function Results({ rows }: { rows: Lead[] }) {
                     </td>
                     <td style={{ ...td, color: '#94a3b8', fontSize: 12, minWidth: 320, maxWidth: 460, lineHeight: 1.5 }}>{r.overview.length > 220 ? r.overview.slice(0, 220) + '…' : r.overview || '—'}</td>
                   </tr>
-                  {open === key && <tr><td colSpan={8} style={{ background: '#121826', borderBottom: `1px solid ${C.line}` }}><Detail r={r} /></td></tr>}
+                  {open === key && <tr><td colSpan={9} style={{ background: '#121826', borderBottom: `1px solid ${C.line}` }}><Detail r={r} /></td></tr>}
                 </Fragment>
               )
             })}
@@ -174,27 +181,39 @@ function Downloads({ rows }: { rows: Lead[] }) {
   )
 }
 
-function useRun(onRows?: (r: Lead[]) => void) {
+function useRun(onRows?: (r: Lead[]) => void, onRemoved?: (keys: string[]) => void, onRestored?: (rows: Lead[]) => void) {
   const [running, setRunning] = useState(false)
   const [message, setMessage] = useState('')
   const [done, setDone] = useState(0)
   const [total, setTotal] = useState(0)
   const [logs, setLogs] = useState<string[]>([])
   const [rows, setRowsState] = useState<Lead[]>([])
+  const [removed, setRemoved] = useState<Lead[][]>([])        // stack of removal batches, for Undo
   const setRows = (r: Lead[]) => { setRowsState(r); if (r.length) onRows?.(r) }
+  const removeRows = (keys: string[]) => {
+    const gone = rows.filter(r => keys.includes(leadKey(r)))
+    if (!gone.length) return
+    setRowsState(rows.filter(r => !keys.includes(leadKey(r))))
+    setRemoved(st => [...st, gone]); onRemoved?.(keys)
+  }
+  const undoRemove = () => {
+    const last = removed[removed.length - 1]
+    if (!last) return
+    setRemoved(st => st.slice(0, -1)); setRowsState([...rows, ...last]); onRestored?.(last)
+  }
   const logRef = useRef<HTMLDivElement>(null)
   const log = (m: string) => { setMessage(m); setLogs(p => [...p, m]); setTimeout(() => logRef.current?.scrollTo(0, 1e9), 40) }
-  return { running, setRunning, message, done, setDone, total, setTotal, logs, setLogs, rows, setRows, log, logRef }
+  return { removeRows, undoRemove, undoCount: removed.reduce((n, b) => n + b.length, 0), running, setRunning, message, done, setDone, total, setTotal, logs, setLogs, rows, setRows, log, logRef }
 }
 
 // ── Tab 1: Find ────────────────────────────────────────────────────────────
-function FindTab({ onLeads, serverKey }: { onLeads: (r: Lead[]) => void; serverKey: boolean }) {
+function FindTab({ onLeads, onRemoved, onRestored, serverKey }: { onLeads: (r: Lead[]) => void; onRemoved: (k: string[]) => void; onRestored: (r: Lead[]) => void; serverKey: boolean }) {
   const [apiKey, setApiKey] = useState('')
   const [locations, setLocations] = useState(STATE_MARKETS.FL.join('\n'))
   const [radius, setRadius] = useState(25)
   const [target, setTarget] = useState(60)
   const [mode, setMode] = useState<SearchMode>('locators')
-  const s = useRun(onLeads)
+  const s = useRun(onLeads, onRemoved, onRestored)
 
   const run = async () => {
     const locs = locations.split('\n').map(l => l.trim()).filter(Boolean)
@@ -268,17 +287,17 @@ function FindTab({ onLeads, serverKey }: { onLeads: (r: Lead[]) => void; serverK
         </div>
       </div>
       {(s.running || s.logs.length > 0) && <Progress message={s.message} done={s.done} total={s.total} logs={s.logs} logRef={s.logRef} />}
-      {s.rows.length > 0 && <><Stats rows={s.rows} /><Results rows={s.rows} /></>}
+      {s.rows.length > 0 && <><Stats rows={s.rows} /><Results rows={s.rows} onRemove={s.removeRows} onUndo={s.undoRemove} undoCount={s.undoCount} locked={s.running} /></>}
     </>
   )
 }
 
 // ── Tab 2: Upload CSV ──────────────────────────────────────────────────────
-function UploadTab({ onLeads }: { onLeads: (r: Lead[]) => void }) {
+function UploadTab({ onLeads, onRemoved, onRestored }: { onLeads: (r: Lead[]) => void; onRemoved: (k: string[]) => void; onRestored: (r: Lead[]) => void }) {
   const [fileName, setFileName] = useState('')
   const [drag, setDrag] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
-  const s = useRun(onLeads)
+  const s = useRun(onLeads, onRemoved, onRestored)
   const pick = (r: Record<string, string>, ...keys: string[]) => { for (const k of keys) if (r[k]) return r[k]; return '' }
 
   const process = async (file: File) => {
@@ -320,7 +339,7 @@ function UploadTab({ onLeads }: { onLeads: (r: Lead[]) => void }) {
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}><Downloads rows={s.rows} /></div>
       </div>
       {(s.running || s.logs.length > 0) && <Progress message={s.message} done={s.done} total={s.total} logs={s.logs} logRef={s.logRef} />}
-      {s.rows.length > 0 && <><Stats rows={s.rows} /><Results rows={s.rows} /></>}
+      {s.rows.length > 0 && <><Stats rows={s.rows} /><Results rows={s.rows} onRemove={s.removeRows} onUndo={s.undoRemove} undoCount={s.undoCount} locked={s.running} /></>}
     </>
   )
 }
@@ -364,6 +383,8 @@ export default function Home() {
     for (const r of rows) map.set(leadKey(r), r)
     return [...map.values()]
   })
+  // Removing from a results table also removes from the saved queue — unless a call was already logged on it
+  const removeLeads = (keys: string[]) => setLeads(prev => prev.filter(l => !keys.includes(leadKey(l)) || !!status[leadKey(l)]))
   const log = (key: string, s: Outcome, note: string) => { setStatus(p => ({ ...p, [key]: { s, at: Date.now(), note } })); setHistory(h => [...h, key]) }
   const undo = () => setHistory(h => {
     const key = h[h.length - 1]
@@ -389,13 +410,13 @@ export default function Home() {
           {(leads.length > 0 || loggedCount > 0) && (
             <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap', marginBottom: 24 }}>
               {loggedCount > 0 && <button onClick={() => download('my_call_log.csv', toCallLogCSV(leads, status, leadKey))} style={btn(false)}>⬇️ Download my call log ({loggedCount})</button>}
-              {leads.length > 0 && <button onClick={() => download('parts_locators_contacts.csv', toContactsCSV(leads))} style={btn(false)}>⬇️ Contacts CSV ({leads.length})</button>}
+              {leads.some(l => status[leadKey(l)]?.s !== 'notfit') && <button onClick={() => download('parts_locators_contacts.csv', toContactsCSV(leads.filter(l => status[leadKey(l)]?.s !== 'notfit')))} style={btn(false)}>⬇️ Contacts CSV ({leads.filter(l => status[leadKey(l)]?.s !== 'notfit').length}, skips “Not a fit”)</button>}
             </div>
           )}
         </>
       )}
-      {tab === 'find' && <FindTab onLeads={addLeads} serverKey={serverKey} />}
-      {tab === 'upload' && <UploadTab onLeads={addLeads} />}
+      {tab === 'find' && <FindTab onLeads={addLeads} onRemoved={removeLeads} onRestored={addLeads} serverKey={serverKey} />}
+      {tab === 'upload' && <UploadTab onLeads={addLeads} onRemoved={removeLeads} onRestored={addLeads} />}
     </div>
   )
 }
