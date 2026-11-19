@@ -11,44 +11,53 @@ const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`
 const toCsv = (headers: string[], rows: unknown[][]) =>
   [headers.map(esc).join(','), ...rows.map(r => r.map(esc).join(','))].join('\r\n')
 
-// Zoho's Industry field is a picklist; an unknown value is rejected on import.
-// Change this to a value that exists in your Zoho account.
-export const ZOHO_INDUSTRY = 'Other'
-export const ZOHO_LEAD_SOURCE = 'Parts Locator Radar'
-
 function splitName(full: string): { first: string; last: string } {
   const parts = full.trim().split(/\s+/).filter(Boolean)
-  if (parts.length === 0) return { first: '', last: 'Unknown' } // Zoho Leads require a Last Name
+  if (parts.length === 0) return { first: '', last: '' }
   if (parts.length === 1) return { first: '', last: parts[0] }
   return { first: parts[0], last: parts.slice(1).join(' ') }
 }
 
-/** Compact file that maps straight onto Zoho CRM's Leads import. */
-export function toZohoLeadsCSV(rows: Lead[]): string {
+/** Plain contact list: opens in Excel/Google Sheets and imports into any CRM (HubSpot, Salesforce, Pipedrive…). */
+export function toContactsCSV(rows: Lead[]): string {
   const headers = [
-    'Company', 'First Name', 'Last Name', 'Designation', 'Email', 'Phone', 'Website',
-    'Street', 'City', 'State', 'Zip Code', 'Lead Source', 'Industry', 'Rating', 'Description',
+    'Company', 'First Name', 'Last Name', 'Job Title', 'Email', 'Phone', 'Website',
+    'Street', 'City', 'State', 'Zip', 'Lead Score', 'Business Type', 'Franchise/Chain', 'Locations', 'Notes',
   ]
   return toCsv(headers, rows.map(r => {
     const who = splitName(r.ownerName || r.primaryContactName)
     const title = r.ownerName ? 'Owner' : r.primaryContactTitle
     const phone = (r.phone || r.allPhones.split(';')[0] || '').trim()
-    const description = [
+    const notes = [
       r.overview && `Overview: ${r.overview}`,
-      r.businessType !== 'Unclear' && `Type: ${r.businessType}`,
-      r.franchiseStatus !== 'Independent' && r.franchiseStatus !== 'Unknown' && `Ownership: ${r.franchiseStatus}`,
-      r.multiLocation === 'Yes' && `Locations: ${r.locationCount}`,
-      r.paymentProcessors ? `Processors on site: ${r.paymentProcessors}` : 'No processor detected on site',
-      r.onlineCheckout === 'No' && 'No online checkout',
+      r.paymentProcessors ? `Processors on site: ${r.paymentProcessors}` : r.websiteStatus === 'OK' ? 'No processor detected on site' : '',
+      r.onlineCheckout === 'No' && r.websiteStatus === 'OK' && 'No online checkout',
       r.quoteOnly && 'Quote/phone-driven',
       r.shipsNationwide && 'Ships nationwide',
       r.otherContacts && `Other contacts: ${r.otherContacts}`,
       r.pitchNotes && `Pitch: ${r.pitchNotes}`,
-      `Lead score: ${r.leadScore}/100`,
     ].filter(Boolean).join('\n')
     return [
       r.name, who.first, who.last, title, r.primaryContactEmail, phone, r.website,
-      r.street, r.city, r.state, r.zip, ZOHO_LEAD_SOURCE, ZOHO_INDUSTRY, r.rating, description,
+      r.street, r.city, r.state, r.zip, r.leadScore, r.businessType,
+      r.franchiseStatus === 'Unknown' ? '' : r.franchiseStatus, r.multiLocation === 'Yes' ? r.locationCount : '', notes,
+    ]
+  }))
+}
+
+export type CallOutcome = 'talked' | 'noanswer' | 'callback' | 'notfit'
+const OUTCOME_LABEL: Record<CallOutcome, string> = { talked: 'Talked to them', noanswer: 'No answer / voicemail', callback: 'Call back later', notfit: 'Not a fit' }
+
+/** The agent's own activity log — works as the CRM when there isn't one. */
+export function toCallLogCSV(rows: Lead[], status: Record<string, { s: CallOutcome; at: number; note: string }>, keyOf: (l: Lead) => string): string {
+  const headers = ['Date', 'Time', 'Outcome', 'Company', 'Contact', 'Phone', 'Email', 'Website', 'City', 'State', 'Note']
+  const logged = rows.filter(r => status[keyOf(r)]).sort((a, b) => status[keyOf(b)].at - status[keyOf(a)].at)
+  return toCsv(headers, logged.map(r => {
+    const st = status[keyOf(r)]
+    const d = new Date(st.at)
+    return [
+      d.toLocaleDateString(), d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), OUTCOME_LABEL[st.s],
+      r.name, r.ownerName || r.primaryContactName, r.phone || r.allPhones.split(';')[0] || '', r.primaryContactEmail, r.website, r.city, r.state, st.note,
     ]
   }))
 }

@@ -146,6 +146,26 @@ assert.equal(brandKey('Solo Salvage, Inc.'), brandKey('SOLO SALVAGE LLC'))
 const viaGoogle = analyzeSite(mk({ name: 'Solo Salvage', sameNameListings: 3 }), page(autoText))
 assert.equal(viaGoogle.multiLocation, 'Yes')
 
+
+// ── Call plan (what the sales agent sees) ──────────────────────────────────
+import { callPlan, tempOf, leadKey } from '../src/lib/script'
+const plan = callPlan({ ...base, ...intel }, 'Sam')
+assert.equal(plan.temp, 'Hot')
+assert.equal(plan.askFor, 'Maria Gonzalez (Owner)')
+assert.ok(plan.why.length >= 2 && plan.why.length <= 4)
+assert.match(plan.opener, /Hi, is this Maria\? This is Sam\./)
+assert.ok(plan.questions.length >= 2 && plan.questions.length <= 3)
+assert.match(plan.emailBody, /^Hi Maria,/)
+assert.equal(plan.caution, '')
+const noName = callPlan({ ...base, ...analyzeSite(mk({ name: 'No Names Auto' }), page(autoText)) })
+assert.equal(noName.hasName, false)
+assert.match(noName.askFor, /owner or whoever handles payments/)
+assert.match(noName.opener, /Who handles payments/)
+assert.match(noName.emailBody, /\[your name\]/, 'unnamed agent gets an obvious placeholder, never a made-up name')
+assert.match(callPlan({ ...base, ...ch }).caution, /Chain/)
+assert.equal(tempOf(69), 'Warm'); assert.equal(tempOf(40), 'Warm'); assert.equal(tempOf(39), 'Cool')
+assert.equal(leadKey({ placeId: '', website: 'a.com', name: 'A' }), 'a.com')
+
 // ── SSRF guard ────────────────────────────────────────────────────────────
 for (const bad of ['http://localhost/x', 'http://127.0.0.1', 'http://10.0.0.5', 'http://192.168.1.1', 'http://169.254.169.254/latest', 'file:///etc/passwd', 'http://172.20.0.1', 'http://[::1]/'])
   assert.equal(isPublicHttpUrl(bad), false, bad)

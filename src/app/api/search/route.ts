@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server'
 import { parseAddress } from '@/lib/csv'
+import { accessDenied, serverPlacesKey } from '@/lib/access'
 import {
   AUTO_TYPES, BROAD_EXTRA_KEYWORDS, CHAIN_NAMES, LOCATOR_KEYWORDS, RELEVANT_NAME,
 } from '@/lib/types'
@@ -95,8 +96,10 @@ async function geocode(address: string, apiKey: string) {
 // POST { apiKey, location, radius (miles), target, mode, excludeIds[] }  (SSE stream of progress events)
 // The API key travels in the body, never in a URL that could end up in logs.
 export async function POST(req: NextRequest) {
+  const denied = accessDenied(req)
+  if (denied) return denied
   const b = await req.json().catch(() => ({}))
-  const apiKey = String(b.apiKey || '')
+  const apiKey = String(b.apiKey || serverPlacesKey())
   const location = String(b.location || '')
   const radius = Math.min(Math.max(Number(b.radius) || 25, 1), 31) // Places text-search bias caps at 50 km
   const target = Math.min(Math.max(parseInt(b.target) || 50, 1), 300)

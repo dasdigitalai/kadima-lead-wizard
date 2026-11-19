@@ -1,24 +1,12 @@
 'use client'
 
-import { Fragment, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { STATE_MARKETS, type BaseLead, type Lead, type SearchMode } from '@/lib/types'
-import { parseCSV, toFullCSV, toZohoLeadsCSV } from '@/lib/csv'
+import { parseCSV, toCallLogCSV, toContactsCSV, toFullCSV } from '@/lib/csv'
 import { markSameNameListings } from '@/lib/group'
-
-const C = { bg: '#0f1117', card: '#1e2433', line: '#2d3748', mute: '#64748b', text: '#e2e8f0', blue: '#3b82f6', green: '#22c55e', amber: '#f59e0b', red: '#ef4444' }
-const input = { background: C.bg, border: `1px solid ${C.line}`, borderRadius: 8, padding: '8px 12px', color: C.text, fontSize: 14, outline: 'none', width: '100%' } as const
-const label = { fontSize: 12, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 1 } as const
-const card = { background: C.card, border: `1px solid ${C.line}`, borderRadius: 12, padding: '1.5rem', marginBottom: '1.5rem' } as const
-const btn = (primary: boolean, disabled = false) => ({
-  background: primary ? (disabled ? C.card : C.blue) : C.bg, color: primary ? (disabled ? C.mute : '#fff') : C.green,
-  border: primary ? (disabled ? `1px solid ${C.line}` : 'none') : `1px solid ${C.green}44`,
-  borderRadius: 8, padding: '10px 22px', fontSize: 14, fontWeight: 600, cursor: disabled ? 'not-allowed' : 'pointer',
-}) as const
-
-function Badge({ text, color = '#94a3b8' }: { text: string; color?: string }) {
-  return <span style={{ background: color + '22', color, border: `1px solid ${color}44`, borderRadius: 4, padding: '2px 8px', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>{text}</span>
-}
-const scoreColor = (n: number) => (n >= 70 ? C.green : n >= 40 ? C.amber : C.mute)
+import { leadKey } from '@/lib/script'
+import { Badge, C, api, btn, card, input, label, scoreColor, store } from './ui'
+import FocusTab, { type Outcome, type StatusMap } from './FocusTab'
 
 async function readSSE(res: Response, onEvent: (ev: Record<string, unknown>) => void) {
   if (!res.body) return
@@ -41,7 +29,7 @@ async function enrichAll(base: BaseLead[], onProgress: (leads: Lead[], done: num
   const BATCH = 10
   for (let i = 0; i < base.length; i += BATCH) {
     try {
-      const res = await fetch('/api/enrich', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ leads: base.slice(i, i + BATCH) }) })
+      const res = await api('/api/enrich', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ leads: base.slice(i, i + BATCH) }) })
       const data = await res.json()
       out.push(...(data.leads || []))
     } catch { /* skip failed batch; user can re-run */ }
@@ -180,45 +168,46 @@ function Downloads({ rows }: { rows: Lead[] }) {
   if (!rows.length) return null
   return (
     <>
-      <button onClick={() => download('parts_locators_zoho_leads.csv', toZohoLeadsCSV(rows))} style={btn(false)}>⬇️ Zoho Leads CSV ({rows.length})</button>
+      <button onClick={() => download('parts_locators_contacts.csv', toContactsCSV(rows))} style={btn(false)}>⬇️ Contacts CSV ({rows.length})</button>
       <button onClick={() => download('parts_locators_full_intel.csv', toFullCSV(rows))} style={btn(false)}>⬇️ Full intel CSV</button>
     </>
   )
 }
 
-function useRun() {
+function useRun(onRows?: (r: Lead[]) => void) {
   const [running, setRunning] = useState(false)
   const [message, setMessage] = useState('')
   const [done, setDone] = useState(0)
   const [total, setTotal] = useState(0)
   const [logs, setLogs] = useState<string[]>([])
-  const [rows, setRows] = useState<Lead[]>([])
+  const [rows, setRowsState] = useState<Lead[]>([])
+  const setRows = (r: Lead[]) => { setRowsState(r); if (r.length) onRows?.(r) }
   const logRef = useRef<HTMLDivElement>(null)
   const log = (m: string) => { setMessage(m); setLogs(p => [...p, m]); setTimeout(() => logRef.current?.scrollTo(0, 1e9), 40) }
   return { running, setRunning, message, done, setDone, total, setTotal, logs, setLogs, rows, setRows, log, logRef }
 }
 
 // ── Tab 1: Find ────────────────────────────────────────────────────────────
-function FindTab() {
+function FindTab({ onLeads, serverKey }: { onLeads: (r: Lead[]) => void; serverKey: boolean }) {
   const [apiKey, setApiKey] = useState('')
   const [locations, setLocations] = useState(STATE_MARKETS.FL.join('\n'))
   const [radius, setRadius] = useState(25)
   const [target, setTarget] = useState(60)
   const [mode, setMode] = useState<SearchMode>('locators')
-  const s = useRun()
+  const s = useRun(onLeads)
 
   const run = async () => {
     const locs = locations.split('\n').map(l => l.trim()).filter(Boolean)
-    if (!apiKey || !locs.length) return alert('Enter your Google Places API key and at least one location.')
+    if ((!apiKey && !serverKey) || !locs.length) return alert(serverKey ? 'Add at least one market.' : 'Enter your Google Places API key and at least one market.')
     s.setRunning(true); s.setRows([]); s.setLogs([]); s.setDone(0); s.setTotal(target)
     const collected: BaseLead[] = []
     for (const loc of locs) {
       if (collected.length >= target) break
       s.log(`Searching ${loc}…`)
       try {
-        const res = await fetch('/api/search', {
+        const res = await api('/api/search', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ apiKey, location: loc, radius, target: target - collected.length, mode, excludeIds: collected.map(b => b.placeId) }),
+          body: JSON.stringify({ apiKey: serverKey ? '' : apiKey, location: loc, radius, target: target - collected.length, mode, excludeIds: collected.map(b => b.placeId) }),
         })
         await readSSE(res, ev => {
           if (ev.message) s.log(String(ev.message))
@@ -238,11 +227,13 @@ function FindTab() {
     <>
       <div style={card}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14, marginBottom: 16 }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {!serverKey && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <label style={label}>Google Places API key</label>
             <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="AIza…" style={input} />
             <span style={{ color: C.mute, fontSize: 12 }}>Used only for this run; sent to your own server routes, never stored.</span>
           </div>
+          )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, gridColumn: 'span 2' }}>
             <label style={label}>Markets to search (one per line)</label>
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -283,11 +274,11 @@ function FindTab() {
 }
 
 // ── Tab 2: Upload CSV ──────────────────────────────────────────────────────
-function UploadTab() {
+function UploadTab({ onLeads }: { onLeads: (r: Lead[]) => void }) {
   const [fileName, setFileName] = useState('')
   const [drag, setDrag] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
-  const s = useRun()
+  const s = useRun(onLeads)
   const pick = (r: Record<string, string>, ...keys: string[]) => { for (const k of keys) if (r[k]) return r[k]; return '' }
 
   const process = async (file: File) => {
@@ -335,17 +326,76 @@ function UploadTab() {
 }
 
 export default function Home() {
-  const [tab, setTab] = useState<'find' | 'upload'>('find')
+  const [tab, setTab] = useState<'work' | 'find' | 'upload'>('find')
+  const [ready, setReady] = useState(false)
+  const [leads, setLeads] = useState<Lead[]>([])
+  const [status, setStatus] = useState<StatusMap>({})
+  const [history, setHistory] = useState<string[]>([])   // keys in the order they were logged, for Undo
+  const [agentName, setAgentName] = useState('')
+  const [serverKey, setServerKey] = useState(false)
+
+  // load saved work once, and learn whether the server holds the Google key / needs an access code
+  useEffect(() => {
+    const saved = store.get<Lead[]>('plr.leads', [])
+    const st = store.get<StatusMap>('plr.status', {})
+    setLeads(saved); setStatus(st); setHistory(store.get<string[]>('plr.history', []))
+    setAgentName(store.get<string>('plr.name', ''))
+    setTab(saved.length ? 'work' : 'find')
+    setReady(true)
+    ;(async () => {
+      try {
+        let cfg = await (await api('/api/config')).json()
+        if (cfg.needsAccessCode && !cfg.authorized) {
+          const code = window.prompt('Enter the team access code:')
+          if (code) { store.set('plr.code', code.trim()); cfg = await (await api('/api/config')).json() }
+        }
+        setServerKey(!!cfg.serverKey)
+      } catch { /* offline: fall back to pasting a key */ }
+    })()
+  }, [])
+
+  useEffect(() => { if (ready) store.set('plr.leads', leads) }, [leads, ready])
+  useEffect(() => { if (ready) { store.set('plr.status', status); store.set('plr.history', history) } }, [status, history, ready])
+  useEffect(() => { if (ready) store.set('plr.name', agentName) }, [agentName, ready])
+
+  // merge new results into the saved queue (never wipes what's already been worked)
+  const addLeads = (rows: Lead[]) => setLeads(prev => {
+    const map = new Map(prev.map(l => [leadKey(l), l]))
+    for (const r of rows) map.set(leadKey(r), r)
+    return [...map.values()]
+  })
+  const log = (key: string, s: Outcome, note: string) => { setStatus(p => ({ ...p, [key]: { s, at: Date.now(), note } })); setHistory(h => [...h, key]) }
+  const undo = () => setHistory(h => {
+    const key = h[h.length - 1]
+    if (key) setStatus(p => { const n = { ...p }; delete n[key]; return n })
+    return h.slice(0, -1)
+  })
+  const clearAll = () => { setLeads([]); setStatus({}); setHistory([]) }
+  const loggedCount = Object.keys(status).length
+
+  const tabs = [['work', `🎯 Work leads${leads.length ? ` (${leads.length})` : ''}`], ['find', '🚀 Find new businesses'], ['upload', '🔍 Scan a CSV']] as const
   return (
     <div style={{ maxWidth: 1600, margin: '0 auto', padding: '2rem 1rem' }}>
       <h1 style={{ fontSize: 28, fontWeight: 700, color: '#f1f5f9' }}>🔩 PartsLocatorRadar</h1>
-      <p style={{ color: C.mute, margin: '4px 0 20px', fontSize: 14 }}>Find used-parts locator businesses, profile their websites and decision-makers, and spot payment-processing opportunities.</p>
-      <div style={{ display: 'flex', gap: 4, marginBottom: '1.5rem', background: C.card, border: `1px solid ${C.line}`, borderRadius: 10, padding: 4, width: 'fit-content' }}>
-        {([['find', '🚀 Find new businesses'], ['upload', '🔍 Scan a CSV']] as const).map(([id, l]) => (
+      <p style={{ color: C.mute, margin: '4px 0 20px', fontSize: 14 }}>Find used-parts locator businesses, see who to call and what to say, and spot payment-processing opportunities.</p>
+      <div style={{ display: 'flex', gap: 4, marginBottom: '1.5rem', background: C.card, border: `1px solid ${C.line}`, borderRadius: 10, padding: 4, width: 'fit-content', flexWrap: 'wrap' }}>
+        {tabs.map(([id, l]) => (
           <button key={id} onClick={() => setTab(id)} style={{ background: tab === id ? C.bg : 'transparent', color: tab === id ? '#f1f5f9' : C.mute, border: tab === id ? '1px solid #334155' : '1px solid transparent', borderRadius: 8, padding: '8px 20px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>{l}</button>
         ))}
       </div>
-      {tab === 'find' ? <FindTab /> : <UploadTab />}
+      {tab === 'work' && (
+        <>
+          <FocusTab leads={leads} status={status} onLog={log} onUndo={undo} onClear={clearAll} agentName={agentName} setAgentName={setAgentName} goFind={() => setTab('find')} />
+          {(leads.length > 0 || loggedCount > 0) && (
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap', marginBottom: 24 }}>
+              {loggedCount > 0 && <button onClick={() => download('my_call_log.csv', toCallLogCSV(leads, status, leadKey))} style={btn(false)}>⬇️ Download my call log ({loggedCount})</button>}
+              {leads.length > 0 && <button onClick={() => download('parts_locators_contacts.csv', toContactsCSV(leads))} style={btn(false)}>⬇️ Contacts CSV ({leads.length})</button>}
+            </div>
+          )}
+        </>
+      )}
+      {tab === 'find' && <FindTab onLeads={addLeads} serverKey={serverKey} />}
+      {tab === 'upload' && <UploadTab onLeads={addLeads} />}
     </div>
   )
 }

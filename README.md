@@ -2,7 +2,7 @@
 
 Find **used-auto-parts locator businesses** (companies that find parts across a network of
 salvage/scrap yards and ship them to the customer), profile each one's website and
-decision-makers, and flag **payment-processing opportunities**. Exports a Zoho CRM-ready CSV.
+decision-makers, and flag **payment-processing opportunities**. Includes a one-lead-at-a-time call queue and CSV export.
 
 Built from the RestaurantRadar app; same shape (Google Places → website scan → CSV), new target.
 
@@ -40,11 +40,23 @@ Deploys to Vercel as-is (routes stay under the 60 s function limit by batching).
 2. **Scan a CSV** – any CSV with a `Company`/`Name` and `Website` column. No Google calls.
 
 ### Exports
-- **Zoho Leads CSV** – Company, First/Last Name, Designation, Email, Phone, Website, address,
-  Lead Source, Industry, Description (overview, processors, pitch notes). Leads with no contact
-  name get Last Name `Unknown` (Zoho requires one). `Industry` is set to `Other` — change
-  `ZOHO_INDUSTRY` in `src/lib/csv.ts` to a value in your Zoho picklist.
+- **Contacts CSV** – Company, First/Last Name, Job Title, Email, Phone, Website, address, score, notes.
+  Opens in Excel/Google Sheets and imports into any CRM.
+- **Call log CSV** – everything the agent logged in the Work screen (date, outcome, contact, note).
 - **Full intel CSV** – every field above.
+
+## Hand-off setup (for whoever deploys it)
+
+The sales agent should never see an API key or a terminal. One-time setup:
+
+1. Create an empty GitHub repo, push this code, and import it into **Vercel** (free tier is fine).
+2. In Vercel → Settings → Environment Variables, add:
+   - `GOOGLE_PLACES_API_KEY` — your key (Places API (New) + Geocoding API enabled). Restrict it to those two APIs in Google Cloud and set a daily quota/budget alert.
+   - `ACCESS_CODE` — any shared password. The app asks for it once per browser; without it nobody with the link can use your key.
+3. Send the agent the Vercel URL, the access code, and **`AGENT_QUICKSTART.md`**.
+
+With the key set on the server, the key field disappears from the page and "Find new businesses" is one click.
+Everything the agent does is saved in their own browser (not shared between people).
 
 ## Honest limitations
 - **Web-only locators with no Google listing won't be found** by Places. Cover more markets,
