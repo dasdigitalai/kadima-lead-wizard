@@ -1,13 +1,13 @@
 // Turn the fetched pages of one website into SiteIntel. Pure functions, no network.
 
-import { CHAIN_NAMES, type BaseLead, type SiteIntel } from './types'
+import type { BaseLead, SiteIntel } from './types'
+import { DEFAULT_INDUSTRY, getIndustry, isOffIndustry, lcFirst, type IndustryProfile } from './industries'
 import {
   extractEmails, extractPhones, findPeople, pickPrimaryEmail, formatPhone, type Person,
 } from './contacts'
 import { extractJsonLd, getFirstHeading, getMeta, getTitle, htmlToText, stripWww } from './html'
 import {
-  classifyBusiness, detectB2B, detectClaims, detectOwnership, detectParts, detectPayments, detectTech,
-  detectVehicleFocus, modernity, type PaymentSignals,
+  detectB2B, detectClaims, detectOfferings, detectOwnership, detectPayments, detectTech, modernity, type PaymentSignals,
 } from './signals'
 
 export interface Page { url: string; html: string }
@@ -62,9 +62,9 @@ function socialLink(html: string, host: RegExp): string {
   return /\/(sharer|share|plugins|tr|dialog)\b|\/\/[^/]+\/?$/.test(url) ? '' : url
 }
 
-export function emptyIntel(status: string, phoneFromPlaces = ''): SiteIntel {
+export function emptyIntel(status: string, phoneFromPlaces = '', industry = DEFAULT_INDUSTRY): SiteIntel {
   return {
-    websiteStatus: status, domain: '', pageTitle: '', overview: '', businessType: 'Unclear',
+    industry, websiteStatus: status, domain: '', pageTitle: '', overview: '', businessType: 'Unclear',
     partsOffered: '', vehicleFocus: '', keyClaims: '', ownerName: '', primaryContactName: '',
     primaryContactTitle: '', primaryContactEmail: '', otherContacts: '', allEmails: '',
     allPhones: phoneFromPlaces, paymentProcessors: '', ecommercePlatform: '', acceptsCards: '',
@@ -79,12 +79,13 @@ export function emptyIntel(status: string, phoneFromPlaces = ''): SiteIntel {
 export function scorePitch(p: {
   hasWebsite: boolean; businessType: string; pay: PaymentSignals; ships: boolean; b2b: boolean
   highTicket: boolean; hasOwner: boolean; hasEmail: boolean; hasPhone: boolean; outdated: boolean
-  franchiseStatus?: string; multiLocation?: boolean; locationCount?: string
+  franchiseStatus?: string; multiLocation?: boolean; locationCount?: string; profile: IndustryProfile
 }): { score: number; notes: string[] } {
   const notes: string[] = []
   let s = 0
-  if (p.businessType === 'Parts Locator' || p.businessType === 'Locator + Yard') { s += 20; notes.push('Confirmed parts-locator model (brokers parts → card-not-present, invoice-style sales).') }
-  else if (p.businessType === 'Salvage Yard / Recycler') { s += 8; notes.push('Looks like a yard/recycler rather than a pure locator.') }
+  const info = p.profile.typeInfo?.[p.businessType]
+  if (info) { s += info.score; notes.push(info.note) }
+  else if (!p.profile.typeInfo && !isOffIndustry(p.businessType)) { s += 12; notes.push(p.profile.pitch) }
   if (p.pay.quoteOnly && !p.pay.onlineCheckout) { s += 20; notes.push('Quote/phone-driven sales with no online checkout → pitch pay-by-link, virtual terminal, and invoicing.') }
   if (!p.pay.onlineCheckout) { s += 5 } else { notes.push('Has online checkout — likely already has a gateway; pitch rates/switching.') }
   if (p.pay.processors.length === 0) { s += 12; notes.push('No payment processor detected on the site.') }
@@ -92,8 +93,8 @@ export function scorePitch(p: {
   else notes.push(`Processor(s) detected: ${p.pay.processors.join(', ')}.`)
   if (p.pay.payOnlineLink) notes.push('Has a pay-online / pay-invoice page.')
   if (p.ships) { s += 10; notes.push('Ships nationwide → mostly card-not-present, higher chargeback exposure.') }
-  if (p.highTicket) { s += 8; notes.push('Sells high-ticket parts (engines/transmissions) → large average ticket.') }
-  if (p.b2b) { s += 5; notes.push('Sells to shops/dealers/fleets → B2B/Level 2-3 interchange savings.') }
+  if (p.highTicket) { s += 8; notes.push(p.profile.bigTicketNote || 'Large ticket sizes.') }
+  if (p.b2b) { s += 5; notes.push('Sells to businesses → B2B / Level 2-3 interchange savings.') }
   if (p.outdated) { s += 3; notes.push('Dated website — payment stack is probably dated too.') }
   if (p.hasOwner) s += 7
   if (p.hasEmail) s += 6
@@ -102,13 +103,13 @@ export function scorePitch(p: {
   if (p.franchiseStatus === 'Franchise' || p.franchiseStatus === 'Chain') { s = Math.min(s, 30); notes.unshift(`${p.franchiseStatus} — payment decisions are usually made at corporate, not the local owner.`) }
   else if (p.franchiseStatus === 'Part of a group') notes.push('Part of a larger group — confirm who controls payment processing.')
   if (p.multiLocation && p.franchiseStatus === 'Independent') { s += 4; notes.push(`Independent with multiple locations (${p.locationCount}) — higher volume, one decision-maker.`) }
-  if (p.businessType === 'Not auto parts') { s = Math.min(s, 12); notes.unshift('Site does not read as auto-parts related.') }
+  if (isOffIndustry(p.businessType)) { s = Math.min(s, 12); notes.unshift(`Site does not read as a ${lcFirst(p.profile.type)} — verify before calling.`) }
   return { score: Math.max(0, Math.min(100, s)), notes }
 }
 
-export function analyzeSite(base: BaseLead, pages: Page[], status = 'OK'): SiteIntel {
+export function analyzeSite(base: BaseLead, pages: Page[], status = 'OK', profile: IndustryProfile = getIndustry()): SiteIntel {
   const home = pages[0]
-  if (!home || !home.html) return emptyIntel(status, base.phone)
+  if (!home || !home.html) return emptyIntel(status, base.phone, profile.id)
 
   const allHtml = pages.map(p => p.html).join('\n')
   const homeText = htmlToText(home.html)
@@ -123,11 +124,11 @@ export function analyzeSite(base: BaseLead, pages: Page[], status = 'OK'): SiteI
   const aboutPage = pages.find((p, i) => i > 0 && /about|story|who-we|our-company/i.test(p.url))
   const aboutPara = bestParagraph(aboutPage ? htmlToText(aboutPage.html) : homeText) || bestParagraph(homeText)
 
-  const businessType = classifyBusiness(allText, home.html)
-  const autoSite = businessType !== 'Not auto parts'
-  const parts = autoSite ? detectParts(allText) : []
-  const vehicles = autoSite ? detectVehicleFocus(allText) : ''
-  const claims = detectClaims(allText)
+  const businessType = profile.classify(allText, home.html)
+  const onIndustry = !isOffIndustry(businessType)
+  const parts = onIndustry ? detectOfferings(allText, profile.offerings) : []
+  const vehicles = onIndustry ? profile.focus?.(allText) ?? '' : ''
+  const claims = [...detectClaims(allText), ...(profile.extraClaims?.(allText) ?? [])]
 
   const overviewBits: string[] = []
   const lead = metaDesc || aboutPara
@@ -135,8 +136,8 @@ export function analyzeSite(base: BaseLead, pages: Page[], status = 'OK'): SiteI
   else if (h1) overviewBits.push(h1)
   if (aboutPara && lead && !lead.includes(aboutPara.slice(0, 40)) && overviewBits.join(' ').length < 260) overviewBits.push(aboutPara)
   const summary: string[] = []
-  if (businessType === 'Not auto parts') summary.push('Does not appear to be an auto-parts business — verify before calling')
-  else if (businessType !== 'Unclear') summary.push(`Appears to be a ${businessType.toLowerCase()}`)
+  if (!onIndustry) summary.push(`Does not appear to be a ${lcFirst(profile.type)} — verify before calling`)
+  else if (businessType !== 'Unclear') summary.push(businessType)
   if (parts.length) summary.push(`sells ${parts.slice(0, 5).join(', ').toLowerCase()}`)
   if (vehicles) summary.push(`focus: ${vehicles}`)
   let overview = overviewBits.join(' ')
@@ -166,22 +167,23 @@ export function analyzeSite(base: BaseLead, pages: Page[], status = 'OK'): SiteI
   const b2b = detectB2B(allText)
   const tech = detectTech(home.html)
   const mod = modernity(home.html, tech)
-  const highTicket = parts.includes('Engines') || parts.includes('Transmissions') || parts.includes('Turbo/diesel')
+  const highTicket = profile.bigTicket.some(n => parts.includes(n))
 
   // ── franchise / chain / multi-location ──────────────────────────────────
   const addressKeys = [...allText.matchAll(/,\s*([A-Z]{2})\s+(\d{5})\b/g)].map(m => `${m[1]} ${m[2]}`)
   const own = detectOwnership({
-    text: allText, name: base.name, domain, chainNames: CHAIN_NAMES, addressKeys,
+    text: allText, name: base.name, domain, chainNames: profile.chains, addressKeys,
     sameNameListings: base.sameNameListings || 1, hasLocationsPage: pages.some((pg, i) => i > 0 && /locations?|branches|our-yards|find-a-/i.test(new URL(pg.url).pathname)),
   })
 
   const { score, notes } = scorePitch({
     franchiseStatus: own.franchiseStatus, multiLocation: own.multiLocation === 'Yes', locationCount: own.locationCount,
-    hasWebsite: true, businessType, pay, ships, b2b, highTicket,
+    profile, hasWebsite: true, businessType, pay, ships, b2b, highTicket,
     hasOwner: !!owner, hasEmail: !!primaryEmail, hasPhone: allPhones.length > 0, outdated: mod.label === 'Outdated',
   })
 
   return {
+    industry: profile.id,
     websiteStatus: status,
     domain,
     pageTitle: title,

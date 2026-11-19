@@ -102,11 +102,12 @@ assert.deepEqual(extractPhones('', 'Order #12345678901 call 561-555-0142 or Fax 
 assert.ok(htmlToText('<p>A</p><p>B</p>').split('\n').length === 2)
 
 // ── Business classification (cases taken from real sites) ──────────────────
-import { classifyBusiness } from '../src/lib/signals'
-const cls = (html: string) => classifyBusiness(htmlToText(html), html)
+import { classifyAutoParts } from '../src/lib/auto'
+import { OFF_INDUSTRY } from '../src/lib/types'
+const cls = (html: string) => classifyAutoParts(htmlToText(html), html)
 assert.equal(cls('<title>Used Auto Parts Locator</title><h1>Find Quality Used Auto Parts</h1><p>Explore millions of used auto parts in our extensive salvage database. Find millions of used auto parts from local salvage yards. We ship cars trucks engines transmissions nationwide.</p>'), 'Parts Locator')
 assert.equal(cls('<title>Pick Your Part</title><p>Pick Your Part is North America\'s largest recycler of used cars and trucks. Pick Your Part salvage yards sell used car parts. Sell your car today. Free quote on engines and transmissions.</p>'), 'Salvage Yard / Recycler')
-assert.equal(cls('<title>PartsSource</title><p>Healthcare parts for hospitals, clinical equipment and biomedical teams. Request a part quote.</p>'), 'Not auto parts')
+assert.equal(cls('<title>PartsSource</title><p>Healthcare parts for hospitals, clinical equipment and biomedical teams. Request a part quote.</p>'), OFF_INDUSTRY)
 
 
 // ── Franchise / chain / multi-location ────────────────────────────────────
@@ -165,6 +166,70 @@ assert.match(noName.emailBody, /\[your name\]/, 'unnamed agent gets an obvious p
 assert.match(callPlan({ ...base, ...ch }).caution, /Chain/)
 assert.equal(tempOf(69), 'Warm'); assert.equal(tempOf(40), 'Warm'); assert.equal(tempOf(39), 'Cool')
 assert.equal(leadKey({ placeId: '', website: 'a.com', name: 'A' }), 'a.com')
+
+
+// ── Industry profiles ──────────────────────────────────────────────────────
+import { INDUSTRY_LIST, INDUSTRY_GROUPS, getIndustry, DEFAULT_INDUSTRY } from '../src/lib/industries'
+
+// every profile is complete and well-formed
+const ids = new Set<string>()
+for (const p of INDUSTRY_LIST) {
+  assert.ok(!ids.has(p.id), `duplicate id ${p.id}`); ids.add(p.id)
+  assert.ok(p.searchTerms.length >= 3, `${p.id}: needs >=3 search terms`)
+  assert.ok(p.offerings.length >= 3, `${p.id}: needs >=3 offerings`)
+  assert.ok(p.pitch.length > 30 && p.pitchNoun && p.orderPhrase && p.askFirst, `${p.id}: missing pitch wording`)
+  assert.ok(p.vocab.flags.includes('g') && p.vocabMin >= 1, `${p.id}: vocab must be global`)
+  assert.ok(p.chains.length >= 5, `${p.id}: chains`)
+  // classifier returns the type or off-industry, and never throws on empty text
+  assert.equal(p.classify('', ''), OFF_INDUSTRY)
+}
+assert.ok(INDUSTRY_LIST.length >= 30, `expected 30+ industries, got ${INDUSTRY_LIST.length}`)
+assert.equal(INDUSTRY_GROUPS.reduce((n, g) => n + g.items.length, 0), INDUSTRY_LIST.length)
+assert.equal(getIndustry('nope').id, DEFAULT_INDUSTRY, 'unknown id falls back to auto parts')
+assert.equal(getIndustry(undefined).id, DEFAULT_INDUSTRY)
+
+// an HVAC company scanned under the HVAC profile
+const hvac = getIndustry('hvac')
+const hvacPage = [{ url: 'https://coolair.com/', html: `<html><head><title>Cool Air HVAC | Air Conditioning Repair</title><meta name="viewport" content="width=device-width"></head><body>
+<h1>Air conditioning and heating experts</h1><p>Family owned HVAC contractor offering AC repair, furnace installation, heat pump service and commercial duct cleaning. Book a service call today — 24/7 emergency service. Licensed and insured. Free estimate on every install.</p>
+<div><h3>Tony Ricci</h3><p>Owner</p></div><p>Call (561) 555-0188 or <a href="mailto:tony@coolair.com">email us</a>.</p>${'x'.repeat(120)}</body></html>` }]
+const hv = analyzeSite(mk({ name: 'Cool Air HVAC' }), hvacPage, 'OK', hvac)
+assert.equal(hv.industry, 'hvac')
+assert.equal(hv.businessType, 'HVAC contractor')
+assert.equal(hv.ownerName, 'Tony Ricci')
+assert.match(hv.partsOffered, /AC repair/)
+assert.match(hv.partsOffered, /Installation/)
+assert.match(hv.keyClaims, /24\/7/)
+assert.match(hv.keyClaims, /Licensed & insured/)
+assert.equal(hv.quoteOnly, 'Yes', '"free estimate" counts as quote-driven')
+assert.ok(hv.leadScore >= 40, `on-industry HVAC should score, got ${hv.leadScore}`)
+
+// the SAME page under the auto-parts profile is off-industry and capped
+const hvAsAuto = analyzeSite(mk({ name: 'Cool Air HVAC' }), hvacPage)
+assert.equal(hvAsAuto.businessType, OFF_INDUSTRY)
+assert.ok(hvAsAuto.leadScore <= 12)
+// and an auto-parts page under HVAC is off-industry too
+const autoAsHvac = analyzeSite(mk({}), page(autoText), 'OK', hvac)
+assert.equal(autoAsHvac.businessType, OFF_INDUSTRY)
+
+// industry-specific chains
+const orkin = analyzeSite(mk({ name: 'Orkin Pest Control' }), [{ url: 'https://orkin.com/', html: `<html><body><p>Pest control termite exterminator rodent mosquito service. Schedule a treatment.</p>${'x'.repeat(120)}</body></html>` }], 'OK', getIndustry('pest-control'))
+assert.equal(orkin.franchiseStatus, 'Chain')
+assert.ok(orkin.leadScore <= 30)
+// global retailers are chains in every industry
+assert.equal(analyzeSite(mk({ name: 'Home Depot Tool Rental' }), page(autoText), 'OK', getIndustry('equipment-rental')).franchiseStatus, 'Chain')
+
+// scripts speak the selected industry's language, and still match auto parts exactly
+const hvPlan = callPlan({ ...mk({}), ...hv }, 'Sam')
+assert.match(hvPlan.opener, /I help HVAC companies like/)
+assert.match(hvPlan.emailBody, /when they book a service call/)
+assert.match(hvPlan.questions[0], /book a service call|collect payment/)
+assert.ok(hvPlan.why.length >= 1)
+assert.match(callPlan({ ...base, ...intel }, 'Sam').opener, /I help parts businesses like Sunshine/)
+assert.match(callPlan({ ...base, ...intel }, 'Sam').questions[0], /asks for a part/)
+// old saved leads (no industry field) still work as auto parts
+const legacy = { ...base, ...intel } as unknown as Record<string, unknown>; delete legacy.industry
+assert.match(callPlan(legacy as never, 'Sam').opener, /parts businesses/)
 
 // ── SSRF guard ────────────────────────────────────────────────────────────
 for (const bad of ['http://localhost/x', 'http://127.0.0.1', 'http://10.0.0.5', 'http://192.168.1.1', 'http://169.254.169.254/latest', 'file:///etc/passwd', 'http://172.20.0.1', 'http://[::1]/'])

@@ -5,6 +5,7 @@ import { STATE_MARKETS, type BaseLead, type Lead, type SearchMode } from '@/lib/
 import { parseCSV, toCallLogCSV, toContactsCSV, toFullCSV } from '@/lib/csv'
 import { markSameNameListings } from '@/lib/group'
 import { leadKey } from '@/lib/script'
+import { DEFAULT_INDUSTRY, INDUSTRY_GROUPS, getIndustry, isOffIndustry, lcFirst } from '@/lib/industries'
 import { Badge, C, api, btn, card, input, label, scoreColor, store } from './ui'
 import FocusTab, { type Outcome, type StatusMap } from './FocusTab'
 
@@ -24,12 +25,12 @@ async function readSSE(res: Response, onEvent: (ev: Record<string, unknown>) => 
   }
 }
 
-async function enrichAll(base: BaseLead[], onProgress: (leads: Lead[], done: number) => void) {
+async function enrichAll(base: BaseLead[], industry: string, onProgress: (leads: Lead[], done: number) => void) {
   const out: Lead[] = []
   const BATCH = 10
   for (let i = 0; i < base.length; i += BATCH) {
     try {
-      const res = await api('/api/enrich', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ leads: base.slice(i, i + BATCH) }) })
+      const res = await api('/api/enrich', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ leads: base.slice(i, i + BATCH), industry }) })
       const data = await res.json()
       out.push(...(data.leads || []))
     } catch { /* skip failed batch; user can re-run */ }
@@ -43,11 +44,27 @@ function download(name: string, csv: string) {
   const a = document.createElement('a'); a.href = url; a.download = name; a.click(); URL.revokeObjectURL(url)
 }
 
+// ── Industry picker ────────────────────────────────────────────────────────
+function IndustryPicker({ value, onChange, disabled }: { value: string; onChange: (id: string) => void; disabled?: boolean }) {
+  const p = getIndustry(value)
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, gridColumn: '1 / -1' }}>
+      <label style={label} htmlFor="industry">Industry</label>
+      <select id="industry" value={value} onChange={e => onChange(e.target.value)} disabled={disabled} style={{ ...input, fontSize: 16, padding: '10px 12px' }}>
+        {INDUSTRY_GROUPS.map(g => (
+          <optgroup key={g.group} label={g.group}>{g.items.map(i => <option key={i.id} value={i.id}>{i.label}</option>)}</optgroup>
+        ))}
+      </select>
+      <span style={{ color: '#94a3b8', fontSize: 13, lineHeight: 1.5 }}>💡 <b>Why payment processing fits:</b> {p.pitch}</span>
+    </div>
+  )
+}
+
 // ── Results ────────────────────────────────────────────────────────────────
 function Stats({ rows }: { rows: Lead[] }) {
   const n = (f: (r: Lead) => boolean) => rows.filter(f).length
   const stats = [
-    ['Total', rows.length], ['Hot (70+)', n(r => r.leadScore >= 70)], ['Parts locators', n(r => r.businessType.includes('Locator'))],
+    ['Total', rows.length], ['Hot (70+)', n(r => r.leadScore >= 70)], ['Look like a fit', n(r => !isOffIndustry(r.businessType) && r.businessType !== 'Unclear' && r.websiteStatus === 'OK')], ['Off-industry', n(r => isOffIndustry(r.businessType))],
     ['Owner found', n(r => !!r.ownerName)], ['Email found', n(r => !!r.primaryContactEmail)], ['No processor seen', n(r => !r.paymentProcessors && r.websiteStatus === 'OK')],
     ['Franchise / chain', n(r => r.franchiseStatus === 'Franchise' || r.franchiseStatus === 'Chain')], ['Multi-location', n(r => r.multiLocation === 'Yes')],
     ['Quote/phone-driven', n(r => r.quoteOnly === 'Yes')], ['Ships nationwide', n(r => r.shipsNationwide === 'Yes')], ['No website', n(r => r.websiteStatus !== 'OK')],
@@ -71,7 +88,7 @@ function Detail({ r }: { r: Lead }) {
       <div>
         <div style={{ color: '#f1f5f9', fontWeight: 700, marginBottom: 6 }}>Website overview</div>
         <div style={{ color: '#cbd5e1', marginBottom: 8 }}>{r.overview || '—'}</div>
-        {row('Parts', r.partsOffered)}{row('Vehicles', r.vehicleFocus)}{row('Claims', r.keyClaims)}{row('Marketplaces', r.marketplaces)}
+        {row('Offers', r.partsOffered)}{row('Focus', r.vehicleFocus)}{row('Industry', getIndustry(r.industry).label)}{row('Claims', r.keyClaims)}{row('Marketplaces', r.marketplaces)}
         {row('Ownership', r.franchiseStatus)}{row('Locations', r.multiLocation === 'Yes' ? r.locationCount : r.multiLocation === 'No' ? '1 (no sign of others)' : '')}{row('Ownership evidence', r.franchiseEvidence)}
         {row('Page title', r.pageTitle)}{row('Tech', [r.websiteTech, r.websiteModern].filter(Boolean).join(' · '))}
       </div>
@@ -138,7 +155,7 @@ function Results({ rows, onRemove, onUndo, undoCount, locked }: { rows: Lead[]; 
                         {r.multiLocation === 'Yes' && <Badge text={`${r.locationCount} locations`} color={C.amber} />}
                       </div>
                     </td>
-                    <td style={{ ...td, whiteSpace: 'nowrap' }}>{r.businessType === 'Unclear' ? <span style={{ color: C.mute }}>—</span> : <Badge text={r.businessType} color={r.businessType.includes('Locator') ? C.blue : '#94a3b8'} />}</td>
+                    <td style={{ ...td, whiteSpace: 'nowrap' }}>{r.businessType === 'Unclear' ? <span style={{ color: C.mute }}>—</span> : isOffIndustry(r.businessType) ? <Badge text="Off-industry" color={C.red} /> : <Badge text={r.businessType} color={C.blue} />}</td>
                     <td style={{ ...td, minWidth: 160 }}>{contact || <span style={{ color: '#475569' }}>—</span>}</td>
                     <td style={td}>{r.primaryContactEmail || <span style={{ color: '#475569' }}>—</span>}</td>
                     <td style={{ ...td, whiteSpace: 'nowrap' }}>{(r.phone || r.allPhones.split(';')[0] || '—')}</td>
@@ -175,8 +192,8 @@ function Downloads({ rows }: { rows: Lead[] }) {
   if (!rows.length) return null
   return (
     <>
-      <button onClick={() => download('parts_locators_contacts.csv', toContactsCSV(rows))} style={btn(false)}>⬇️ Contacts CSV ({rows.length})</button>
-      <button onClick={() => download('parts_locators_full_intel.csv', toFullCSV(rows))} style={btn(false)}>⬇️ Full intel CSV</button>
+      <button onClick={() => download('lead_wizard_contacts.csv', toContactsCSV(rows))} style={btn(false)}>⬇️ Contacts CSV ({rows.length})</button>
+      <button onClick={() => download('lead_wizard_full_intel.csv', toFullCSV(rows))} style={btn(false)}>⬇️ Full intel CSV</button>
     </>
   )
 }
@@ -207,12 +224,12 @@ function useRun(onRows?: (r: Lead[]) => void, onRemoved?: (keys: string[]) => vo
 }
 
 // ── Tab 1: Find ────────────────────────────────────────────────────────────
-function FindTab({ onLeads, onRemoved, onRestored, serverKey }: { onLeads: (r: Lead[]) => void; onRemoved: (k: string[]) => void; onRestored: (r: Lead[]) => void; serverKey: boolean }) {
+function FindTab({ onLeads, onRemoved, onRestored, serverKey, industry, setIndustry }: { onLeads: (r: Lead[]) => void; onRemoved: (k: string[]) => void; onRestored: (r: Lead[]) => void; serverKey: boolean; industry: string; setIndustry: (id: string) => void }) {
   const [apiKey, setApiKey] = useState('')
   const [locations, setLocations] = useState(STATE_MARKETS.FL.join('\n'))
   const [radius, setRadius] = useState(25)
   const [target, setTarget] = useState(60)
-  const [mode, setMode] = useState<SearchMode>('locators')
+  const [mode, setMode] = useState<SearchMode>('focused')
   const s = useRun(onLeads, onRemoved, onRestored)
 
   const run = async () => {
@@ -226,7 +243,7 @@ function FindTab({ onLeads, onRemoved, onRestored, serverKey }: { onLeads: (r: L
       try {
         const res = await api('/api/search', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ apiKey: serverKey ? '' : apiKey, location: loc, radius, target: target - collected.length, mode, excludeIds: collected.map(b => b.placeId) }),
+          body: JSON.stringify({ apiKey: serverKey ? '' : apiKey, location: loc, radius, target: target - collected.length, mode, industry, excludeIds: collected.map(b => b.placeId) }),
         })
         await readSSE(res, ev => {
           if (ev.message) s.log(String(ev.message))
@@ -237,7 +254,7 @@ function FindTab({ onLeads, onRemoved, onRestored, serverKey }: { onLeads: (r: L
     const base = markSameNameListings(collected)
     if (!base.length) { s.log('No candidates found. Try a larger radius, broad mode, or other cities.'); s.setRunning(false); return }
     s.setTotal(base.length); s.log(`Profiling ${base.length} websites…`)
-    const out = await enrichAll(base, (leads, d) => { s.setRows(leads); s.setDone(d); s.log(`Profiled ${d}/${base.length}`) })
+    const out = await enrichAll(base, industry, (leads, d) => { s.setRows(leads); s.setDone(d); s.log(`Profiled ${d}/${base.length}`) })
     s.log(`✅ Done — ${out.length} leads`)
     s.setRunning(false)
   }
@@ -246,6 +263,7 @@ function FindTab({ onLeads, onRemoved, onRestored, serverKey }: { onLeads: (r: L
     <>
       <div style={card}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14, marginBottom: 16 }}>
+          <IndustryPicker value={industry} onChange={setIndustry} disabled={s.running} />
           {!serverKey && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <label style={label}>Google Places API key</label>
@@ -276,13 +294,13 @@ function FindTab({ onLeads, onRemoved, onRestored, serverKey }: { onLeads: (r: L
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <label style={label}>Search mode</label>
             <select value={mode} onChange={e => setMode(e.target.value as SearchMode)} style={input}>
-              <option value="locators">Parts locators (focused)</option>
-              <option value="broad">Locators + yards &amp; recyclers (broad)</option>
+              <option value="focused">Focused — closest matches</option>
+              <option value="broad">Broad — adds related searches</option>
             </select>
           </div>
         </div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          <button onClick={run} disabled={s.running} style={btn(true, s.running)}>{s.running ? '⏳ Running…' : '🔩 Find parts locators'}</button>
+          <button onClick={run} disabled={s.running} style={btn(true, s.running)}>{s.running ? '⏳ Running…' : `🔎 Find ${lcFirst(getIndustry(industry).label)}`}</button>
           <Downloads rows={s.rows} />
         </div>
       </div>
@@ -293,7 +311,7 @@ function FindTab({ onLeads, onRemoved, onRestored, serverKey }: { onLeads: (r: L
 }
 
 // ── Tab 2: Upload CSV ──────────────────────────────────────────────────────
-function UploadTab({ onLeads, onRemoved, onRestored }: { onLeads: (r: Lead[]) => void; onRemoved: (k: string[]) => void; onRestored: (r: Lead[]) => void }) {
+function UploadTab({ onLeads, onRemoved, onRestored, industry, setIndustry }: { onLeads: (r: Lead[]) => void; onRemoved: (k: string[]) => void; onRestored: (r: Lead[]) => void; industry: string; setIndustry: (id: string) => void }) {
   const [fileName, setFileName] = useState('')
   const [drag, setDrag] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -317,13 +335,14 @@ function UploadTab({ onLeads, onRemoved, onRestored }: { onLeads: (r: Lead[]) =>
     const base = markSameNameListings(parsed)
     if (!base.length) return alert('No rows with a Company/Name or Website column found.')
     s.setRunning(true); s.setRows([]); s.setLogs([]); s.setDone(0); s.setTotal(base.length); s.log(`Profiling ${base.length} websites…`)
-    await enrichAll(base, (leads, d) => { s.setRows(leads); s.setDone(d); s.log(`Profiled ${d}/${base.length}`) })
+    await enrichAll(base, industry, (leads, d) => { s.setRows(leads); s.setDone(d); s.log(`Profiled ${d}/${base.length}`) })
     s.log('✅ Done'); s.setRunning(false)
   }
 
   return (
     <>
       <div style={card}>
+        <div style={{ display: 'grid', marginBottom: 14 }}><IndustryPicker value={industry} onChange={setIndustry} disabled={s.running} /></div>
         <p style={{ color: '#94a3b8', fontSize: 14, marginBottom: 14 }}>
           Already have a list? Upload a CSV with a <b>Company</b> (or Name) and <b>Website</b> column. No Google API calls — each site is scanned for owner, email, phone, overview and payment signals.
         </p>
@@ -352,6 +371,8 @@ export default function Home() {
   const [history, setHistory] = useState<string[]>([])   // keys in the order they were logged, for Undo
   const [agentName, setAgentName] = useState('')
   const [serverKey, setServerKey] = useState(false)
+  const [industry, setIndustryState] = useState(DEFAULT_INDUSTRY)
+  const setIndustry = (id: string) => { setIndustryState(id); store.set('plr.industry', id) }
 
   // load saved work once, and learn whether the server holds the Google key / needs an access code
   useEffect(() => {
@@ -359,6 +380,7 @@ export default function Home() {
     const st = store.get<StatusMap>('plr.status', {})
     setLeads(saved); setStatus(st); setHistory(store.get<string[]>('plr.history', []))
     setAgentName(store.get<string>('plr.name', ''))
+    setIndustryState(getIndustry(store.get<string>('plr.industry', DEFAULT_INDUSTRY)).id)
     setTab(saved.length ? 'work' : 'find')
     setReady(true)
     ;(async () => {
@@ -397,8 +419,8 @@ export default function Home() {
   const tabs = [['work', `🎯 Work leads${leads.length ? ` (${leads.length})` : ''}`], ['find', '🚀 Find new businesses'], ['upload', '🔍 Scan a CSV']] as const
   return (
     <div style={{ maxWidth: 1600, margin: '0 auto', padding: '2rem 1rem' }}>
-      <h1 style={{ fontSize: 28, fontWeight: 700, color: '#f1f5f9' }}>🔩 PartsLocatorRadar</h1>
-      <p style={{ color: C.mute, margin: '4px 0 20px', fontSize: 14 }}>Find used-parts locator businesses, see who to call and what to say, and spot payment-processing opportunities.</p>
+      <h1 style={{ fontSize: 28, fontWeight: 700, color: '#f1f5f9' }}>🧭 Lead Wizard</h1>
+      <p style={{ color: C.mute, margin: '4px 0 20px', fontSize: 14 }}>Pick an industry, find the businesses, see who to call and what to say, and spot payment-processing opportunities.</p>
       <div style={{ display: 'flex', gap: 4, marginBottom: '1.5rem', background: C.card, border: `1px solid ${C.line}`, borderRadius: 10, padding: 4, width: 'fit-content', flexWrap: 'wrap' }}>
         {tabs.map(([id, l]) => (
           <button key={id} onClick={() => setTab(id)} style={{ background: tab === id ? C.bg : 'transparent', color: tab === id ? '#f1f5f9' : C.mute, border: tab === id ? '1px solid #334155' : '1px solid transparent', borderRadius: 8, padding: '8px 20px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>{l}</button>
@@ -410,13 +432,13 @@ export default function Home() {
           {(leads.length > 0 || loggedCount > 0) && (
             <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap', marginBottom: 24 }}>
               {loggedCount > 0 && <button onClick={() => download('my_call_log.csv', toCallLogCSV(leads, status, leadKey))} style={btn(false)}>⬇️ Download my call log ({loggedCount})</button>}
-              {leads.some(l => status[leadKey(l)]?.s !== 'notfit') && <button onClick={() => download('parts_locators_contacts.csv', toContactsCSV(leads.filter(l => status[leadKey(l)]?.s !== 'notfit')))} style={btn(false)}>⬇️ Contacts CSV ({leads.filter(l => status[leadKey(l)]?.s !== 'notfit').length}, skips “Not a fit”)</button>}
+              {leads.some(l => status[leadKey(l)]?.s !== 'notfit') && <button onClick={() => download('lead_wizard_contacts.csv', toContactsCSV(leads.filter(l => status[leadKey(l)]?.s !== 'notfit')))} style={btn(false)}>⬇️ Contacts CSV ({leads.filter(l => status[leadKey(l)]?.s !== 'notfit').length}, skips “Not a fit”)</button>}
             </div>
           )}
         </>
       )}
-      {tab === 'find' && <FindTab onLeads={addLeads} onRemoved={removeLeads} onRestored={addLeads} serverKey={serverKey} />}
-      {tab === 'upload' && <UploadTab onLeads={addLeads} onRemoved={removeLeads} onRestored={addLeads} />}
+      {tab === 'find' && <FindTab onLeads={addLeads} onRemoved={removeLeads} onRestored={addLeads} serverKey={serverKey} industry={industry} setIndustry={setIndustry} />}
+      {tab === 'upload' && <UploadTab onLeads={addLeads} onRemoved={removeLeads} onRestored={addLeads} industry={industry} setIndustry={setIndustry} />}
     </div>
   )
 }

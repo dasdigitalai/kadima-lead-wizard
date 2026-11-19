@@ -2,7 +2,8 @@
 
 import { analyzeSite, emptyIntel, type Page } from './intel'
 import { extractLinks, stripWww } from './html'
-import { CHAIN_NAMES, type BaseLead, type Lead } from './types'
+import type { BaseLead, Lead } from './types'
+import { getIndustry, type IndustryProfile } from './industries'
 
 const UA = 'Mozilla/5.0 (compatible; PartsLocatorRadar/1.0)'
 
@@ -86,13 +87,13 @@ export async function crawlSite(website: string): Promise<{ pages: Page[]; statu
   return { pages: [home, ...subs.map(f => f.page).filter((p): p is Page => !!p)], status: 'OK' }
 }
 
-export async function enrichLead(base: BaseLead): Promise<Lead> {
+export async function enrichLead(base: BaseLead, profile: IndustryProfile = getIndustry()): Promise<Lead> {
   const { pages, status } = await crawlSite(base.website)
-  const intel = pages.length ? analyzeSite(base, pages, status) : emptyIntel(status, base.phone)
+  const intel = pages.length ? analyzeSite(base, pages, status, profile) : emptyIntel(status, base.phone, profile.id)
   if (!pages.length) {
     // we can still say something from the name and Google data
     const nm = base.name.toLowerCase()
-    const chain = CHAIN_NAMES.find(c => nm.includes(c))
+    const chain = profile.chains.find(c => nm.includes(c))
     if (chain) { intel.franchiseStatus = 'Chain'; intel.franchiseEvidence = `Known chain/brand: "${chain.trim()}"` }
     if ((base.sameNameListings || 1) >= 2) { intel.multiLocation = 'Yes'; intel.locationCount = String(base.sameNameListings); intel.franchiseEvidence = [intel.franchiseEvidence, `${base.sameNameListings} Google listings with this name`].filter(Boolean).join('; ') }
   }

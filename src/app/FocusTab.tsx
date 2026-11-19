@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react'
 import type { Lead } from '@/lib/types'
 import { callPlan, leadKey, type Temp } from '@/lib/script'
 import { Badge, C, store } from './ui'
+import { getIndustry, isOffIndustry } from '@/lib/industries'
 
 export type Outcome = 'talked' | 'noanswer' | 'callback' | 'notfit'
 export interface Logged { s: Outcome; at: number; note: string }
@@ -39,10 +40,11 @@ export default function FocusTab({ leads, status, onLog, onUndo, onClear, agentN
 
   const reachable = (l: Lead) => !!(l.phone || l.allPhones || l.primaryContactEmail)
   const pool = useMemo(() => leads
-    .filter(l => !status[leadKey(l)] && !skipped.includes(leadKey(l)) && reachable(l) && l.businessType !== 'Not auto parts' && (showChains || !isChain(l)))
+    .filter(l => !status[leadKey(l)] && !skipped.includes(leadKey(l)) && reachable(l) && !isOffIndustry(l.businessType) && (showChains || !isChain(l)))
     .sort((a, b) => b.leadScore - a.leadScore), [leads, status, skipped, showChains])
   const followUps = useMemo(() => leads.filter(l => ['noanswer', 'callback'].includes(status[leadKey(l)]?.s)).sort((a, b) => status[leadKey(a)].at - status[leadKey(b)].at), [leads, status])
 
+  const multiIndustry = new Set(leads.map(l => l.industry || 'auto-parts-locators')).size > 1
   const doneToday = Object.values(status).filter(x => x.at >= startOfToday()).length
   const current = (override && leads.find(l => leadKey(l) === override)) || pool[0]
   const next = pool.find(l => current && leadKey(l) !== leadKey(current))
@@ -97,6 +99,7 @@ export default function FocusTab({ leads, status, onLog, onUndo, onClear, agentN
           <div style={section}>
             <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
               <Badge text={TEMP_LABEL[plan.temp]} color={TEMP_COLOR[plan.temp]} />
+              {multiIndustry && <Badge text={getIndustry(current.industry).label} color="#a78bfa" />}
               {current.businessType !== 'Unclear' && <Badge text={current.businessType} color={C.blue} />}
               {current.multiLocation === 'Yes' && <Badge text={`${current.locationCount} locations`} color={C.amber} />}
             </div>

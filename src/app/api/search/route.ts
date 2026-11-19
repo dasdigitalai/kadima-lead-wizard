@@ -1,9 +1,7 @@
 import { NextRequest } from 'next/server'
 import { parseAddress } from '@/lib/csv'
 import { accessDenied, serverPlacesKey } from '@/lib/access'
-import {
-  AUTO_TYPES, BROAD_EXTRA_KEYWORDS, CHAIN_NAMES, LOCATOR_KEYWORDS, RELEVANT_NAME,
-} from '@/lib/types'
+import { getIndustry, type IndustryProfile } from '@/lib/industries'
 import type { BaseLead, SearchMode } from '@/lib/types'
 
 export const maxDuration = 60
@@ -44,13 +42,13 @@ function miles(a: { lat: number; lng: number }, b: { latitude: number; longitude
   return 2 * R * Math.asin(Math.sqrt(x))
 }
 
-function keep(p: Place): boolean {
+function keep(p: Place, profile: IndustryProfile): boolean {
   if (p.businessStatus === 'CLOSED_PERMANENTLY') return false
   const name = (p.displayName?.text || '').toLowerCase()
-  if (CHAIN_NAMES.some(c => name.includes(c))) return false
-  const types = p.types || []
-  // keep if the name reads like an auto-parts business, or Google files it under an auto category
-  return RELEVANT_NAME.test(p.displayName?.text || '') || types.some(t => AUTO_TYPES.has(t))
+  if (profile.chains.some(c => name.includes(c))) return false
+  // some industries are noisy on Google: require the name to look relevant, or Google to file it under a matching type
+  if (profile.strictName) return profile.strictName.test(p.displayName?.text || '') || (p.types || []).some(t => profile.googleTypes.includes(t))
+  return true
 }
 
 function toBase(p: Place, searchLocation: string): BaseLead {
@@ -93,7 +91,7 @@ async function geocode(address: string, apiKey: string) {
   return d.results[0].geometry.location as { lat: number; lng: number }
 }
 
-// POST { apiKey, location, radius (miles), target, mode, excludeIds[] }  (SSE stream of progress events)
+// POST { apiKey, location, radius (miles), target, mode, industry, excludeIds[] }  (SSE stream of progress events)
 // The API key travels in the body, never in a URL that could end up in logs.
 export async function POST(req: NextRequest) {
   const denied = accessDenied(req)
@@ -103,9 +101,10 @@ export async function POST(req: NextRequest) {
   const location = String(b.location || '')
   const radius = Math.min(Math.max(Number(b.radius) || 25, 1), 31) // Places text-search bias caps at 50 km
   const target = Math.min(Math.max(parseInt(b.target) || 50, 1), 300)
-  const mode = (b.mode === 'broad' ? 'broad' : 'locators') as SearchMode
+  const mode = (b.mode === 'broad' ? 'broad' : 'focused') as SearchMode
+  const profile = getIndustry(typeof b.industry === 'string' ? b.industry : undefined)
   const exclude = new Set<string>(Array.isArray(b.excludeIds) ? b.excludeIds : [])
-  const keywords = mode === 'broad' ? [...LOCATOR_KEYWORDS, ...BROAD_EXTRA_KEYWORDS] : LOCATOR_KEYWORDS
+  const keywords = mode === 'broad' ? [...profile.searchTerms, ...profile.broadTerms] : profile.searchTerms
   const radiusM = Math.min(Math.round(radius * 1609.34), 50000)
   const deadline = Date.now() + 50_000
 
@@ -140,7 +139,7 @@ export async function POST(req: NextRequest) {
             const id = p.id || ''
             if (!id || seen.has(id)) continue
             seen.add(id)
-            if (!keep(p)) continue
+            if (!keep(p, profile)) continue
             if (p.location && miles(center, p.location) > radius * 1.05) continue
             leads.push(toBase(p, location)); added++
             if (leads.length >= target) break outer

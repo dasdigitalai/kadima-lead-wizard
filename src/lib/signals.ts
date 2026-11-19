@@ -83,7 +83,7 @@ export function detectPayments(html: string, text: string): PaymentSignals {
   const cartWords = /\b(add to cart|add to basket|view cart|shopping cart|proceed to checkout|checkout)\b/.test(t) ||
     /\/(cart|checkout)\b/.test(h)
   const onlineCheckout = cartWords && (commerce.length > 0 || processors.length > 0 || /add to cart/.test(t))
-  const quoteOnly = /\b(request (?:a )?(?:part|quote)|get (?:a )?(?:free )?quote|part request|parts? inquiry|call for (?:price|pricing|quote)|free quote|find (?:my|your) part|request a free)\b/.test(t)
+  const quoteOnly = /\b(request (?:a |an )?(?:part|quote|estimate|proposal|service)|get (?:a |an )?(?:free )?(?:quote|estimate)|part request|parts? inquiry|call for (?:price|pricing|quote)|free (?:quote|estimate)|find (?:my|your) part|request a free|schedule (?:a |an |your )?(?:estimate|service|appointment|consultation|inspection)|book (?:a |an |your )?(?:service|appointment|call|estimate)|service request)\b/.test(t)
   const payOnlineLink = /\b(pay (?:your |an |my )?invoice|pay online|make a payment|payment portal|pay now|secure payment|payment link)\b/.test(t)
   return {
     processors,
@@ -99,43 +99,10 @@ export function detectPayments(html: string, text: string): PaymentSignals {
 
 // ── What the business actually does ────────────────────────────────────────
 
-const PART_CATEGORIES: [string, RegExp][] = [
-  ['Engines', /\b(used |rebuilt |remanufactured )?engines?\b|\bmotors?\b(?! vehicle)/],
-  ['Transmissions', /\btransmissions?\b|\btransaxles?\b|\btransfer cases?\b/],
-  ['Rear ends/axles', /\brear ends?\b|\bdifferentials?\b|\baxles?\b/],
-  ['Body parts', /\bbumpers?\b|\bfenders?\b|\bhoods?\b|\bquarter panels?\b|\bbody parts?\b|\bdoors?\b/],
-  ['Lights/mirrors', /\bheadlights?\b|\btail ?lights?\b|\bmirrors?\b|\bheadlamps?\b/],
-  ['Electronics/modules', /\becm\b|\bpcm\b|\bcomputers?\b|\bmodules?\b|\bfuse box\b|\binstrument clusters?\b|\bradios?\b|\binfotainment\b/],
-  ['A/C & cooling', /\bradiators?\b|\ba\/c\b|\bcompressors?\b|\bcondensers?\b/],
-  ['Wheels/tires', /\bwheels?\b|\brims?\b|\btires?\b/],
-  ['Interior/seats', /\bseats?\b|\binteriors?\b|\bdashboards?\b|\bcarpets?\b/],
-  ['Suspension/steering', /\bsuspension\b|\bsteering\b|\bstruts?\b|\bcontrol arms?\b/],
-  ['Turbo/diesel', /\bturbos?\b|\bdiesel\b|\binjectors?\b/],
-  ['Airbags/safety', /\bair ?bags?\b|\bseat belts?\b/],
-  ['Catalytic converters', /\bcatalytic converters?\b/],
-]
-
-const MAKES = ['ford', 'chevrolet', 'chevy', 'gmc', 'dodge', 'ram', 'jeep', 'chrysler', 'toyota', 'honda', 'nissan', 'subaru', 'mazda', 'hyundai', 'kia', 'bmw', 'mercedes', 'audi', 'volkswagen', 'volvo', 'lexus', 'acura', 'infiniti', 'cadillac', 'buick', 'lincoln', 'tesla', 'porsche', 'land rover', 'mitsubishi', 'freightliner', 'peterbilt', 'kenworth', 'cummins', 'detroit diesel', 'mack', 'international']
-
-export function detectParts(text: string): string[] {
+/** Which of an industry's offering categories appear in the site text. */
+export function detectOfferings(text: string, offerings: [string, RegExp][]): string[] {
   const t = text.toLowerCase()
-  return PART_CATEGORIES.filter(([, re]) => re.test(t)).map(([n]) => n)
-}
-
-export function detectVehicleFocus(text: string): string {
-  const t = text.toLowerCase()
-  const makes = MAKES
-    .map(m => [m, (t.match(new RegExp(`\\b${m}\\b`, 'g')) || []).length] as const)
-    .filter(([, c]) => c >= 2)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 5)
-    .map(([m]) => m.replace(/\b\w/g, c => c.toUpperCase()))
-  const tags: string[] = []
-  if (/\b(heavy[- ]duty|semi|class 8|commercial truck|diesel truck|freightliner|peterbilt|kenworth)\b/.test(t)) tags.push('Heavy-duty/truck')
-  if (/\b(import|foreign|european|asian)\b/.test(t)) tags.push('Import')
-  if (/\bdomestic\b/.test(t)) tags.push('Domestic')
-  if (/\b(rv|motorhome|marine|motorcycle|powersports|atv)\b/.test(t)) tags.push('RV/Marine/Powersports')
-  return [...tags, ...makes].join(', ')
+  return offerings.filter(([, re]) => re.test(t)).map(([n]) => n)
 }
 
 export function detectClaims(text: string): string[] {
@@ -149,64 +116,13 @@ export function detectClaims(text: string): string[] {
   else if (/\bwarranty\b/.test(t)) claims.push('Warranty offered')
   if (/\bsame[- ]day\b/.test(t)) claims.push('Same-day')
   if (/\b(next[- ]day|overnight|24 hours?)\b/.test(t)) claims.push('Next-day')
-  if (/\bhard[- ]to[- ]find\b|\bobsolete\b/.test(t)) claims.push('Hard-to-find parts')
-  if (/\boem\b|\bgenuine\b/.test(t)) claims.push('OEM')
-  if (/\b(rebuilt|remanufactured|reman)\b/.test(t)) claims.push('Rebuilt/reman')
-  if (/\bcore (?:charge|deposit|return)\b/.test(t)) claims.push('Core charges')
-  const net = t.match(/\b(?:network of|access to|search(?:es|ing)?)\s+(?:over\s+|more than\s+)?(\d[\d,]*\+?|hundreds|thousands)\s+(?:of\s+)?(?:\w+\s+){0,2}(?:salvage|recycl\w+|yards|dismantl\w+)/)
-  if (net) claims.push(`Yard network: ${net[1]}`)
+  if (/\b24\/7\b|\b24[- ]hour (?:service|emergency)\b|\bemergency service\b/.test(t)) claims.push('24/7 / emergency')
+  if (/\blicensed(?: and| &)? insured\b|\bbonded\b/.test(t)) claims.push('Licensed & insured')
   return claims
 }
 
 export function detectB2B(text: string): boolean {
-  return /\b(body shops?|repair shops?|mechanics?|dealers?|dealerships?|fleets?|wholesale|trade accounts?|commercial accounts?|net ?30|open an account|shops? welcome)\b/i.test(text)
-}
-
-export type BusinessType = 'Parts Locator' | 'Salvage Yard / Recycler' | 'Locator + Yard' | 'Unclear' | 'Not auto parts'
-
-const AUTO_WORDS = /\b(auto|automotive|vehicles?|cars?|trucks?|salvage|junk ?yards?|engines?|transmissions?|oem|collision|body shops?|recyclers?)\b/g
-
-/** Does this text read like it's about cars/trucks at all? (guards against e.g. a medical-parts "PartsFinder") */
-export function isAutoRelated(text: string): boolean {
-  return (text.toLowerCase().match(AUTO_WORDS) || []).length >= 4
-}
-
-export function classifyBusiness(text: string, html: string): BusinessType {
-  if (!isAutoRelated(text)) return 'Not auto parts'
-  const t = (text + ' ' + html.slice(0, 20000)).toLowerCase()
-  const head = ((html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || '') + ' ' + (html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i)?.[1] || '')).toLowerCase()
-
-  // strong: the business itself says it searches a yard network on the customer's behalf
-  const strong = [
-    /parts? locat(?:or|ing)|locating service|locate (?:the |any |your )?(?:part|engine|transmission)/,
-    /(?:network|database|inventory)\s+of\s+(?:\w+\s+){0,3}(?:salvage|recycl|yards|dismantl)/,
-    /(?:hundreds|thousands)\s+of\s+(?:\w+\s+){0,2}(?:salvage|recycl\w*|yards|dismantl\w*)/,
-    /\bwe (?:find|locate|source|search)\b[^.]{0,60}\b(?:part|engine|transmission)/,
-    /(?:search|find|explore)[^.]{0,70}(?:salvage|recycl\w*)\s+(?:yards?|database|network|inventory)|salvage (?:database|network)/,
-    /\bnationwide (?:network|search|locator|locating)\b/,
-  ].filter(r => r.test(t)).length + (/part[s]?\s+(?:locator|finder|locating)|locator service|parts? search/.test(head) ? 1 : 0)
-
-  // weak: generic quote/inquiry language that yards use too
-  const weak = [
-    /\b(?:request|find) (?:a |my |your )?part\b|\bpart request\b|\bfree quote\b/,
-    /\binterchange\b|\bhollander\b|\bcar-part\.com\b/,
-  ].filter(r => r.test(t)).length
-
-  // yard: they own inventory / dismantle / buy cars
-  const yard = [
-    /\bour (?:salvage )?yards?\b|\bour (?:\d+[- ]acre|facility|lot|warehouse|locations?)\b/,
-    /\bwe (?:dismantle|recycle|buy (?:junk|wrecked|salvage|used|your))\b|\bcash for (?:junk )?cars\b|\bsell your (?:junk |used |old )?(?:car|vehicle)\b/,
-    /\bu-?pull\b|\bpick[- ]?(?:n|and)[- ]?pull\b|\bself[- ]service\b|\bpick your part\b/,
-    /\b\d+\s*acres?\b/,
-    /\b(?:salvage yards?|recycler of used|largest recycler)\b[^.]{0,50}\b(?:sell|located|near|across)\b|\brecycler of used (?:cars|vehicles)\b/,
-    /\b(?:inventory|vehicles?) (?:arrives|received) (?:daily|weekly)\b/,
-  ].filter(r => r.test(t)).length
-
-  if (strong >= 1 && yard >= 2) return 'Locator + Yard'
-  if (strong >= 1) return 'Parts Locator'
-  if (weak >= 2 && yard === 0) return 'Parts Locator'
-  if (yard >= 1) return 'Salvage Yard / Recycler'
-  return 'Unclear'
+  return /\b(body shops?|repair shops?|mechanics?|dealers?|dealerships?|fleets?|wholesale|trade accounts?|commercial accounts?|net ?30|open an account|shops? welcome|contractors?|businesses|commercial customers?|b2b)\b/i.test(text)
 }
 
 // ── Franchise / chain / multi-location ─────────────────────────────────────

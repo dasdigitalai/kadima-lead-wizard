@@ -1,4 +1,5 @@
 import type { Lead } from './types'
+import { getIndustry } from './industries'
 
 export function parseAddress(full: string) {
   const cleaned = full.replace(/,\s*USA\s*$/i, '').trim()
@@ -22,7 +23,7 @@ function splitName(full: string): { first: string; last: string } {
 export function toContactsCSV(rows: Lead[]): string {
   const headers = [
     'Company', 'First Name', 'Last Name', 'Job Title', 'Email', 'Phone', 'Website',
-    'Street', 'City', 'State', 'Zip', 'Lead Score', 'Business Type', 'Franchise/Chain', 'Locations', 'Notes',
+    'Street', 'City', 'State', 'Zip', 'Industry', 'Lead Score', 'Business Type', 'Franchise/Chain', 'Locations', 'Notes',
   ]
   return toCsv(headers, rows.map(r => {
     const who = splitName(r.ownerName || r.primaryContactName)
@@ -39,7 +40,7 @@ export function toContactsCSV(rows: Lead[]): string {
     ].filter(Boolean).join('\n')
     return [
       r.name, who.first, who.last, title, r.primaryContactEmail, phone, r.website,
-      r.street, r.city, r.state, r.zip, r.leadScore, r.businessType,
+      r.street, r.city, r.state, r.zip, getIndustry(r.industry).label, r.leadScore, r.businessType,
       r.franchiseStatus === 'Unknown' ? '' : r.franchiseStatus, r.multiLocation === 'Yes' ? r.locationCount : '', notes,
     ]
   }))
@@ -65,9 +66,9 @@ export function toCallLogCSV(rows: Lead[], status: Record<string, { s: CallOutco
 /** Everything we know, one row per business. */
 export function toFullCSV(rows: Lead[]): string {
   const headers = [
-    'Lead Score', 'Company', 'Business Type', 'Website', 'Website Status',
+    'Lead Score', 'Company', 'Industry', 'Business Type', 'Website', 'Website Status',
     'Owner', 'Primary Contact', 'Contact Title', 'Primary Email', 'Phone(s)', 'All Emails', 'Other Contacts',
-    'Overview', 'Parts Offered', 'Vehicle Focus', 'Key Claims',
+    'Overview', 'Offers', 'Focus', 'Key Claims',
     'Payment Processors', 'E-commerce Platform', 'Online Checkout', 'Quote/Phone Driven', 'Pay-Online Page',
     'Accepts Cards (stated)', 'Ships Nationwide', 'Sells To Shops/Dealers', 'Marketplaces', 'Financing', 'Pitch Notes',
     'Franchise/Chain', 'Locations', 'Multi-Location', 'Ownership Evidence',
@@ -76,7 +77,7 @@ export function toFullCSV(rows: Lead[]): string {
     'Search Location', 'Place ID',
   ]
   return toCsv(headers, rows.map(r => [
-    r.leadScore, r.name, r.businessType, r.website, r.websiteStatus,
+    r.leadScore, r.name, getIndustry(r.industry).label, r.businessType, r.website, r.websiteStatus,
     r.ownerName, r.primaryContactName, r.primaryContactTitle, r.primaryContactEmail, r.allPhones, r.allEmails, r.otherContacts,
     r.overview, r.partsOffered, r.vehicleFocus, r.keyClaims,
     r.paymentProcessors, r.ecommercePlatform, r.onlineCheckout, r.quoteOnly, r.payOnlineLink,

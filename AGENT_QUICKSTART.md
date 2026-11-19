@@ -31,7 +31,7 @@ Read the quoted line under **Say this**, then pick **one** question. You don't n
 - Names/emails come from the business's own website, so a name is sometimes missing or wrong. If you hear "that's not who you want," just tap **Not a fit** or leave a note and move on.
 - **⚠️ Chain / franchise** warning = the decision is made at corporate. Skip it.
 - Want a record? Tap **⬇️ Download my call log** to get a spreadsheet of everything you did.
-- Need more leads? Tap **🚀 Find new businesses**, pick a state, press the blue button, and wait. New leads are added to your queue.
+- Need more leads? Tap **🚀 Find new businesses**, choose an **Industry** from the dropdown, pick a state, press the blue button, and wait. New leads are added to your queue (the little purple tag shows which industry each one is from).
 
 ## Tips that help (use what works for you)
 - Set the **Goal** to something small first (5). Hitting it feels good; raise it later.
